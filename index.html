@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FrankenPeanuts</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Special+Elite&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #f5f0e1;
+    --paper-dark: #e8e0c8;
+    --ink: #1a1a1a;
+    --ink-light: #555;
+    --border: #2a2a2a;
+    --red: #c0392b;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--paper-dark);
+    background-image: repeating-linear-gradient(0deg, transparent, transparent 28px, rgba(0,0,0,0.02) 28px, rgba(0,0,0,0.02) 29px);
+    min-height: 100vh;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 2rem 1rem;
+    font-family: 'Libre Baskerville', Georgia, serif;
+    color: var(--ink);
+  }
+  header { text-align: center; margin-bottom: 1.5rem; }
+  h1 {
+    font-family: 'Special Elite', 'Courier New', monospace;
+    font-size: clamp(1.6rem, 5vw, 2.8rem);
+    letter-spacing: 0.05em; text-transform: uppercase;
+  }
+  h1::before, h1::after { content: '\2726'; font-size: 0.5em; vertical-align: middle; margin: 0 0.4em; color: var(--red); }
+  .subtitle { font-style: italic; color: var(--ink-light); font-size: 0.85rem; margin-top: 0.3rem; }
+
+  .comic-wrapper {
+    background: #fff;
+    border: 3px solid var(--border);
+    box-shadow: 4px 4px 0 rgba(0,0,0,0.15), inset 0 0 40px rgba(0,0,0,0.03);
+    padding: 6px; max-width: 960px; width: 100%;
+  }
+  .comic-strip {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 4px; background: var(--border); border: 2px solid var(--border);
+  }
+  .panel {
+    position: relative; aspect-ratio: 1 / 1;
+    overflow: hidden; background: #fff;
+  }
+  .panel img {
+    width: 100%; height: 100%;
+    object-fit: contain; display: block;
+  }
+  .panel .loader {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Special Elite', monospace; font-size: 0.9rem; color: var(--ink-light);
+    background: #fff; z-index: 2;
+  }
+  .panel .loader.hidden { display: none; }
+  .panel .date-label {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: rgba(0,0,0,0.7); color: #fff;
+    font-size: 0.65rem; padding: 2px 6px; text-align: center;
+    font-family: 'Special Elite', monospace;
+    opacity: 0; transition: opacity 0.2s; z-index: 3; pointer-events: none;
+  }
+  .panel:hover .date-label { opacity: 1; }
+
+  .controls { margin-top: 1.2rem; display: flex; gap: 0.8rem; flex-wrap: wrap; justify-content: center; }
+  button {
+    font-family: 'Special Elite', monospace; font-size: 0.95rem;
+    padding: 0.5em 1.4em; border: 2px solid var(--border);
+    background: var(--paper); color: var(--ink); cursor: pointer;
+    transition: all 0.15s; letter-spacing: 0.03em;
+  }
+  button:hover { background: var(--ink); color: var(--paper); }
+  button:active { transform: scale(0.97); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .share-feedback {
+    font-family: 'Special Elite', monospace; font-size: 0.8rem;
+    color: var(--red); margin-top: 0.5rem; min-height: 1.2em; text-align: center;
+  }
+  footer {
+    margin-top: 2rem; font-size: 0.7rem; color: var(--ink-light);
+    text-align: center; font-style: italic; line-height: 1.6;
+  }
+  footer a { color: var(--ink-light); }
+
+  @media (max-width: 600px) {
+    .comic-strip { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>FrankenPeanuts</h1>
+  <p class="subtitle">A randomly assembled comic strip</p>
+</header>
+
+<div class="comic-wrapper">
+  <div class="comic-strip" id="strip">
+    <div class="panel" id="p0"><div class="loader">loading&hellip;</div></div>
+    <div class="panel" id="p1"><div class="loader">loading&hellip;</div></div>
+    <div class="panel" id="p2"><div class="loader">loading&hellip;</div></div>
+    <div class="panel" id="p3"><div class="loader">loading&hellip;</div></div>
+  </div>
+</div>
+
+<div class="controls">
+  <button id="btn-shuffle">&#x21bb; New Comic</button>
+  <button id="btn-share">&#x2398; Copy Link</button>
+</div>
+<div class="share-feedback" id="share-feedback"></div>
+
+<footer>
+  Panels from <a href="https://peanuts-search.com" target="_blank">peanuts-search.com</a><br>
+  Peanuts &copy; Peanuts Worldwide LLC
+</footer>
+
+<script>
+(function () {
+  /* ===== CONFIG ===== */
+  var STRIP_URL = 'https://peanuts-search.com/I/';
+  var CORS_PROXIES = [
+    function(u){ return 'https://corsproxy.io/?url=' + encodeURIComponent(u); },
+    function(u){ return 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u); }
+  ];
+  var START = new Date(1950, 9, 2);
+  var END   = new Date(2000, 1, 13);
+
+  // A "near-square" panel has width/height ratio in this range
+  var MIN_RATIO = 0.55;
+  var MAX_RATIO = 1.45;
+
+  /* ===== DATE HELPERS ===== */
+  function pad(n) { return String(n).padStart(2, '0'); }
+  function dateToIdx(d) { return '' + d.getFullYear() + pad(d.getMonth()+1) + pad(d.getDate()); }
+  function idxToDate(s) { return new Date(+s.slice(0,4), +s.slice(4,6)-1, +s.slice(6,8)); }
+  function fmtDate(s) { return idxToDate(s).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}); }
+
+  function randomDateIdx() {
+    var d;
+    do { d = new Date(START.getTime() + Math.random() * (END - START)); }
+    while (d.getDay() === 0);   // skip Sundays — variable panel layouts
+    return dateToIdx(d);
+  }
+
+  /* ===== IMAGE LOADING (tries CORS proxies in order) ===== */
+  function loadImageCORS(rawUrl) {
+    return new Promise(function (resolve, reject) {
+      var i = 0;
+      function tryNext() {
+        if (i >= CORS_PROXIES.length) return reject(new Error('all proxies failed'));
+        var img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload  = function () { resolve(img); };
+        img.onerror = function () { i++; tryNext(); };
+        img.src = CORS_PROXIES[i](rawUrl);
+      }
+      tryNext();
+    });
+  }
+
+  /* ===== PANEL DETECTION =====
+     Draws the strip to a canvas, then scans every column to find
+     dark vertical "gutter" lines that span most of the strip height.
+     Returns { panels: [...], canvas } where each panel has
+     { index, x, w, h, ratio }.                                      */
+
+  function detectPanels(img) {
+    var c   = document.createElement('canvas');
+    c.width = img.naturalWidth;
+    c.height = img.naturalHeight;
+    var ctx = c.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+
+    var w = c.width, h = c.height;
+    var data = ctx.getImageData(0, 0, w, h).data;
+
+    // Sample the middle 80 % of height (avoids top/bottom borders)
+    var yStart  = Math.floor(h * 0.10);
+    var yEnd    = Math.floor(h * 0.90);
+    var sampleH = yEnd - yStart;
+
+    // Per-column: fraction of sampled pixels that are "dark"
+    var DARK_PX_THRESH = 60;          // brightness out of 255
+    var darkness = new Float32Array(w);
+    for (var x = 0; x < w; x++) {
+      var cnt = 0;
+      for (var y = yStart; y < yEnd; y += 2) {   // sample every 2nd row
+        var idx = (y * w + x) * 4;
+        if ((data[idx] + data[idx+1] + data[idx+2]) / 3 < DARK_PX_THRESH) cnt++;
+      }
+      darkness[x] = cnt / Math.ceil(sampleH / 2);
+    }
+
+    // Identify gutter regions: runs of columns darker than 70 %
+    var GUTTER_THRESH = 0.70;
+    var gutters = [], inG = false, gStart = 0;
+    for (var x2 = 0; x2 < w; x2++) {
+      if (darkness[x2] > GUTTER_THRESH) {
+        if (!inG) { gStart = x2; inG = true; }
+      } else if (inG) {
+        gutters.push({ start: gStart, end: x2 - 1 });
+        inG = false;
+      }
+    }
+    if (inG) gutters.push({ start: gStart, end: w - 1 });
+
+    // Discard gutters within 3 % of the edges (outer frame)
+    var margin = w * 0.03;
+    var interior = gutters.filter(function (g) {
+      var mid = (g.start + g.end) / 2;
+      return mid > margin && mid < w - margin;
+    });
+
+    // Split points = left edge, gutter midpoints, right edge
+    var splits = [0];
+    for (var gi = 0; gi < interior.length; gi++) {
+      splits.push(Math.round((interior[gi].start + interior[gi].end) / 2));
+    }
+    splits.push(w);
+
+    // Build panel list, skip tiny slivers
+    var panels = [];
+    for (var pi = 0; pi < splits.length - 1; pi++) {
+      var px = splits[pi];
+      var pw = splits[pi + 1] - px;
+      if (pw < w * 0.05) continue;
+      panels.push({ index: pi, x: px, w: pw, h: h, ratio: pw / h });
+    }
+    return { panels: panels, canvas: c };
+  }
+
+  /* ===== EXTRACT A SINGLE PANEL AS DATA-URL ===== */
+  function extractDataURL(srcCanvas, panel) {
+    var c = document.createElement('canvas');
+    c.width  = panel.w;
+    c.height = panel.h;
+    c.getContext('2d').drawImage(srcCanvas, panel.x, 0, panel.w, panel.h, 0, 0, panel.w, panel.h);
+    return c.toDataURL('image/jpeg', 0.85);
+  }
+
+  function isNearSquare(p) { return p.ratio >= MIN_RATIO && p.ratio <= MAX_RATIO; }
+
+  /* ===== LOAD ONE STRIP → RETURN ITS NEAR-SQUARE PANELS ===== */
+  function getSquarePanels(dateIdx) {
+    return loadImageCORS(STRIP_URL + dateIdx).then(function (img) {
+      var result = detectPanels(img);
+      var good = result.panels.filter(isNearSquare);
+      return good.map(function (p) {
+        return { date: dateIdx, panelIndex: p.index, dataURL: extractDataURL(result.canvas, p) };
+      });
+    });
+  }
+
+  /* ===== STATE & HASH ===== */
+  var state = [{},{},{},{}];
+
+  function stateToHash(s) {
+    return '#' + s.map(function(p){ return p.date+'-'+p.panelIndex; }).join(',');
+  }
+  function hashToState(h) {
+    try {
+      var parts = h.replace('#','').split(',');
+      if (parts.length !== 4) return null;
+      var out = parts.map(function(p){
+        var pieces = p.split('-');
+        if (!pieces[0] || pieces[0].length !== 8 || isNaN(+pieces[1])) return null;
+        return { date: pieces[0], panelIndex: parseInt(pieces[1],10) };
+      });
+      return out.indexOf(null) >= 0 ? null : out;
+    } catch(e) { return null; }
+  }
+
+  /* ===== DOM HELPERS ===== */
+  function showPanel(slot, dataURL, dateIdx) {
+    var el = document.getElementById('p' + slot);
+    el.querySelector('.loader').classList.add('hidden');
+    var old = el.querySelector('img'); if (old) old.remove();
+    var oldL = el.querySelector('.date-label'); if (oldL) oldL.remove();
+
+    var img = document.createElement('img');
+    img.src = dataURL;
+    img.alt = 'Peanuts panel from ' + fmtDate(dateIdx);
+    el.appendChild(img);
+
+    var label = document.createElement('div');
+    label.className = 'date-label';
+    label.textContent = fmtDate(dateIdx);
+    el.appendChild(label);
+  }
+
+  function showLoading(slot) {
+    var el = document.getElementById('p' + slot);
+    var ld = el.querySelector('.loader');
+    ld.textContent = 'loading\u2026';
+    ld.classList.remove('hidden');
+    var old = el.querySelector('img'); if (old) old.remove();
+    var oldL = el.querySelector('.date-label'); if (oldL) oldL.remove();
+  }
+
+  function showError(slot) {
+    var el = document.getElementById('p' + slot);
+    var ld = el.querySelector('.loader');
+    ld.textContent = 'could not load';
+    ld.classList.remove('hidden');
+  }
+
+  /* ===== LOAD A SINGLE SLOT (retries with new dates on failure) ===== */
+  function loadSlot(slot, dateIdx, wantPanel) {
+    showLoading(slot);
+    var MAX = 8;
+    var attempt = 0;
+
+    function tryOnce() {
+      if (attempt >= MAX) { showError(slot); return Promise.resolve(); }
+      attempt++;
+      return getSquarePanels(dateIdx).then(function (panels) {
+        // Try to use the requested panel index; otherwise pick random
+        var pick = panels.filter(function(p){ return p.panelIndex === wantPanel; })[0];
+        if (!pick && panels.length) pick = panels[Math.floor(Math.random() * panels.length)];
+        if (pick) {
+          state[slot] = { date: pick.date, panelIndex: pick.panelIndex };
+          showPanel(slot, pick.dataURL, pick.date);
+          return;
+        }
+        // No near-square panels found in this strip — try another
+        dateIdx = randomDateIdx();
+        wantPanel = -1;
+        return tryOnce();
+      }).catch(function () {
+        dateIdx = randomDateIdx();
+        wantPanel = -1;
+        return tryOnce();
+      });
+    }
+    return tryOnce();
+  }
+
+  /* ===== MAIN FLOWS ===== */
+  function setButtons(off) {
+    document.getElementById('btn-shuffle').disabled = off;
+  }
+
+  function generateComic() {
+    setButtons(true);
+    var promises = [0,1,2,3].map(function(i) {
+      return loadSlot(i, randomDateIdx(), -1);
+    });
+    return Promise.all(promises).then(function () {
+      window.history.replaceState(null, '', stateToHash(state));
+      setButtons(false);
+    });
+  }
+
+  function loadFromHash() {
+    var parsed = hashToState(window.location.hash);
+    if (!parsed) return Promise.resolve(false);
+    setButtons(true);
+    var promises = parsed.map(function(p, i) {
+      return loadSlot(i, p.date, p.panelIndex);
+    });
+    return Promise.all(promises).then(function () {
+      window.history.replaceState(null, '', stateToHash(state));
+      setButtons(false);
+      return true;
+    });
+  }
+
+  function init() {
+    loadFromHash().then(function (ok) {
+      if (!ok) generateComic();
+    });
+  }
+
+  document.getElementById('btn-shuffle').addEventListener('click', generateComic);
+
+  document.getElementById('btn-share').addEventListener('click', function () {
+    var url = window.location.origin + window.location.pathname + stateToHash(state);
+    navigator.clipboard.writeText(url).then(function () {
+      var fb = document.getElementById('share-feedback');
+      fb.textContent = 'Link copied!';
+      setTimeout(function(){ fb.textContent = ''; }, 2000);
+    }).catch(function () {
+      window.prompt('Copy this link:', url);
+    });
+  });
+
+  window.addEventListener('hashchange', function () { loadFromHash(); });
+
+  init();
+})();
+</script>
+</body>
+</html>
