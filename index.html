@@ -128,25 +128,47 @@
     function(u){ return 'https://corsproxy.io/?url=' + encodeURIComponent(u); },
     function(u){ return 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u); }
   ];
-  var START = new Date(1950, 9, 2);
-  var END   = new Date(2000, 1, 13);
 
-  // A "near-square" panel has width/height ratio in this range
-  var MIN_RATIO = 0.55;
-  var MAX_RATIO = 1.45;
+  /* ===== MANIFEST (pre-computed panel index) ===== */
+  var manifest = null;        // { "19501002": [{ index, x, w, h }, ...], ... }
+  var panelPool = [];         // flat array of { date, index, x, w, h } for random picks
+
+  function loadManifest() {
+    return fetch('manifest.json').then(function (r) { return r.json(); }).then(function (data) {
+      manifest = data;
+      panelPool = [];
+      var dates = Object.keys(data);
+      for (var i = 0; i < dates.length; i++) {
+        var panels = data[dates[i]];
+        for (var j = 0; j < panels.length; j++) {
+          panelPool.push({
+            date: dates[i],
+            index: panels[j].index,
+            x: panels[j].x,
+            w: panels[j].w,
+            h: panels[j].h
+          });
+        }
+      }
+    });
+  }
+
+  function randomPanel() {
+    return panelPool[Math.floor(Math.random() * panelPool.length)];
+  }
+
+  function findPanel(dateIdx, panelIndex) {
+    if (!manifest[dateIdx]) return null;
+    var panels = manifest[dateIdx];
+    for (var i = 0; i < panels.length; i++) {
+      if (panels[i].index === panelIndex) return { date: dateIdx, index: panels[i].index, x: panels[i].x, w: panels[i].w, h: panels[i].h };
+    }
+    return null;
+  }
 
   /* ===== DATE HELPERS ===== */
-  function pad(n) { return String(n).padStart(2, '0'); }
-  function dateToIdx(d) { return '' + d.getFullYear() + pad(d.getMonth()+1) + pad(d.getDate()); }
   function idxToDate(s) { return new Date(+s.slice(0,4), +s.slice(4,6)-1, +s.slice(6,8)); }
   function fmtDate(s) { return idxToDate(s).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}); }
-
-  function randomDateIdx() {
-    var d;
-    do { d = new Date(START.getTime() + Math.random() * (END - START)); }
-    while (d.getDay() === 0);   // skip Sundays — variable panel layouts
-    return dateToIdx(d);
-  }
 
   /* ===== IMAGE LOADING (tries CORS proxies in order) ===== */
   function loadImageCORS(rawUrl) {
@@ -164,97 +186,13 @@
     });
   }
 
-  /* ===== PANEL DETECTION =====
-     Draws the strip to a canvas, then scans every column to find
-     dark vertical "gutter" lines that span most of the strip height.
-     Returns { panels: [...], canvas } where each panel has
-     { index, x, w, h, ratio }.                                      */
-
-  function detectPanels(img) {
-    var c   = document.createElement('canvas');
-    c.width = img.naturalWidth;
-    c.height = img.naturalHeight;
-    var ctx = c.getContext('2d');
-    ctx.drawImage(img, 0, 0);
-
-    var w = c.width, h = c.height;
-    var data = ctx.getImageData(0, 0, w, h).data;
-
-    // Sample the middle 80 % of height (avoids top/bottom borders)
-    var yStart  = Math.floor(h * 0.10);
-    var yEnd    = Math.floor(h * 0.90);
-    var sampleH = yEnd - yStart;
-
-    // Per-column: fraction of sampled pixels that are "dark"
-    var DARK_PX_THRESH = 60;          // brightness out of 255
-    var darkness = new Float32Array(w);
-    for (var x = 0; x < w; x++) {
-      var cnt = 0;
-      for (var y = yStart; y < yEnd; y += 2) {   // sample every 2nd row
-        var idx = (y * w + x) * 4;
-        if ((data[idx] + data[idx+1] + data[idx+2]) / 3 < DARK_PX_THRESH) cnt++;
-      }
-      darkness[x] = cnt / Math.ceil(sampleH / 2);
-    }
-
-    // Identify gutter regions: runs of columns darker than 70 %
-    var GUTTER_THRESH = 0.70;
-    var gutters = [], inG = false, gStart = 0;
-    for (var x2 = 0; x2 < w; x2++) {
-      if (darkness[x2] > GUTTER_THRESH) {
-        if (!inG) { gStart = x2; inG = true; }
-      } else if (inG) {
-        gutters.push({ start: gStart, end: x2 - 1 });
-        inG = false;
-      }
-    }
-    if (inG) gutters.push({ start: gStart, end: w - 1 });
-
-    // Discard gutters within 3 % of the edges (outer frame)
-    var margin = w * 0.03;
-    var interior = gutters.filter(function (g) {
-      var mid = (g.start + g.end) / 2;
-      return mid > margin && mid < w - margin;
-    });
-
-    // Split points = left edge, gutter midpoints, right edge
-    var splits = [0];
-    for (var gi = 0; gi < interior.length; gi++) {
-      splits.push(Math.round((interior[gi].start + interior[gi].end) / 2));
-    }
-    splits.push(w);
-
-    // Build panel list, skip tiny slivers
-    var panels = [];
-    for (var pi = 0; pi < splits.length - 1; pi++) {
-      var px = splits[pi];
-      var pw = splits[pi + 1] - px;
-      if (pw < w * 0.05) continue;
-      panels.push({ index: pi, x: px, w: pw, h: h, ratio: pw / h });
-    }
-    return { panels: panels, canvas: c };
-  }
-
   /* ===== EXTRACT A SINGLE PANEL AS DATA-URL ===== */
-  function extractDataURL(srcCanvas, panel) {
+  function extractDataURL(img, panel) {
     var c = document.createElement('canvas');
     c.width  = panel.w;
     c.height = panel.h;
-    c.getContext('2d').drawImage(srcCanvas, panel.x, 0, panel.w, panel.h, 0, 0, panel.w, panel.h);
+    c.getContext('2d').drawImage(img, panel.x, 0, panel.w, panel.h, 0, 0, panel.w, panel.h);
     return c.toDataURL('image/jpeg', 0.85);
-  }
-
-  function isNearSquare(p) { return p.ratio >= MIN_RATIO && p.ratio <= MAX_RATIO; }
-
-  /* ===== LOAD ONE STRIP → RETURN ITS NEAR-SQUARE PANELS ===== */
-  function getSquarePanels(dateIdx) {
-    return loadImageCORS(STRIP_URL + dateIdx).then(function (img) {
-      var result = detectPanels(img);
-      var good = result.panels.filter(isNearSquare);
-      return good.map(function (p) {
-        return { date: dateIdx, panelIndex: p.index, dataURL: extractDataURL(result.canvas, p) };
-      });
-    });
   }
 
   /* ===== STATE & HASH ===== */
@@ -310,35 +248,16 @@
     ld.classList.remove('hidden');
   }
 
-  /* ===== LOAD A SINGLE SLOT (retries with new dates on failure) ===== */
-  function loadSlot(slot, dateIdx, wantPanel) {
+  /* ===== LOAD A SINGLE SLOT ===== */
+  function loadSlot(slot, panel) {
     showLoading(slot);
-    var MAX = 8;
-    var attempt = 0;
-
-    function tryOnce() {
-      if (attempt >= MAX) { showError(slot); return Promise.resolve(); }
-      attempt++;
-      return getSquarePanels(dateIdx).then(function (panels) {
-        // Try to use the requested panel index; otherwise pick random
-        var pick = panels.filter(function(p){ return p.panelIndex === wantPanel; })[0];
-        if (!pick && panels.length) pick = panels[Math.floor(Math.random() * panels.length)];
-        if (pick) {
-          state[slot] = { date: pick.date, panelIndex: pick.panelIndex };
-          showPanel(slot, pick.dataURL, pick.date);
-          return;
-        }
-        // No near-square panels found in this strip — try another
-        dateIdx = randomDateIdx();
-        wantPanel = -1;
-        return tryOnce();
-      }).catch(function () {
-        dateIdx = randomDateIdx();
-        wantPanel = -1;
-        return tryOnce();
-      });
-    }
-    return tryOnce();
+    return loadImageCORS(STRIP_URL + panel.date).then(function (img) {
+      var dataURL = extractDataURL(img, panel);
+      state[slot] = { date: panel.date, panelIndex: panel.index };
+      showPanel(slot, dataURL, panel.date);
+    }).catch(function () {
+      showError(slot);
+    });
   }
 
   /* ===== MAIN FLOWS ===== */
@@ -349,7 +268,7 @@
   function generateComic() {
     setButtons(true);
     var promises = [0,1,2,3].map(function(i) {
-      return loadSlot(i, randomDateIdx(), -1);
+      return loadSlot(i, randomPanel());
     });
     return Promise.all(promises).then(function () {
       window.history.replaceState(null, '', stateToHash(state));
@@ -362,7 +281,9 @@
     if (!parsed) return Promise.resolve(false);
     setButtons(true);
     var promises = parsed.map(function(p, i) {
-      return loadSlot(i, p.date, p.panelIndex);
+      var panel = findPanel(p.date, p.panelIndex);
+      if (!panel) panel = randomPanel();  // fallback if hash references unknown panel
+      return loadSlot(i, panel);
     });
     return Promise.all(promises).then(function () {
       window.history.replaceState(null, '', stateToHash(state));
@@ -372,8 +293,13 @@
   }
 
   function init() {
-    loadFromHash().then(function (ok) {
-      if (!ok) generateComic();
+    loadManifest().then(function () {
+      return loadFromHash().then(function (ok) {
+        if (!ok) generateComic();
+      });
+    }).catch(function (err) {
+      console.error('Failed to load manifest:', err);
+      [0,1,2,3].forEach(showError);
     });
   }
 

@@ -1,0 +1,106 @@
+name: Build Panel Manifest
+
+on:
+  workflow_dispatch:
+
+jobs:
+  # ── Split the 1950–2000 date range into 10 chunks ──────────────────────
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - chunk: 0
+            start: "1950-10-02"
+            end: "1955-12-31"
+          - chunk: 1
+            start: "1956-01-01"
+            end: "1960-12-31"
+          - chunk: 2
+            start: "1961-01-01"
+            end: "1965-12-31"
+          - chunk: 3
+            start: "1966-01-01"
+            end: "1970-12-31"
+          - chunk: 4
+            start: "1971-01-01"
+            end: "1975-12-31"
+          - chunk: 5
+            start: "1976-01-01"
+            end: "1980-12-31"
+          - chunk: 6
+            start: "1981-01-01"
+            end: "1985-12-31"
+          - chunk: 7
+            start: "1986-01-01"
+            end: "1990-12-31"
+          - chunk: 8
+            start: "1991-01-01"
+            end: "1995-12-31"
+          - chunk: 9
+            start: "1996-01-01"
+            end: "2000-02-13"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests Pillow numpy
+
+      - name: Build partial manifest (chunk ${{ matrix.chunk }})
+        run: |
+          python scripts/build_manifest.py \
+            --start-date "${{ matrix.start }}" \
+            --end-date "${{ matrix.end }}" \
+            --output "manifest-chunk-${{ matrix.chunk }}.json" \
+            --delay 0.3
+
+      - name: Upload partial manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: manifest-chunk-${{ matrix.chunk }}
+          path: manifest-chunk-${{ matrix.chunk }}.json
+          retention-days: 1
+
+  # ── Merge all chunks and commit ────────────────────────────────────────
+  merge:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download all partial manifests
+        uses: actions/download-artifact@v4
+        with:
+          path: parts
+          pattern: manifest-chunk-*
+          merge-multiple: true
+
+      - name: Merge manifests
+        run: |
+          python scripts/merge_manifests.py parts/manifest-chunk-*.json \
+            --output manifest.json
+
+      - name: Commit manifest
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add manifest.json
+          if git diff --cached --quiet; then
+            echo "No changes to manifest.json"
+          else
+            git commit -m "Update panel manifest [automated]"
+            git push
+          fi
