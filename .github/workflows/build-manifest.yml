@@ -52,19 +52,28 @@ jobs:
       - name: Install dependencies
         run: pip install requests Pillow numpy
 
-      - name: Build partial manifest (chunk ${{ matrix.chunk }})
+      - name: Build partial manifest and extract panels (chunk ${{ matrix.chunk }})
         run: |
           python scripts/build_manifest.py \
             --start-date "${{ matrix.start }}" \
             --end-date "${{ matrix.end }}" \
             --output "manifest-chunk-${{ matrix.chunk }}.json" \
-            --delay 0.3
+            --panels-dir panels \
+            --workers 16 \
+            --delay 0.05
 
       - name: Upload partial manifest
         uses: actions/upload-artifact@v4
         with:
           name: manifest-chunk-${{ matrix.chunk }}
           path: manifest-chunk-${{ matrix.chunk }}.json
+          retention-days: 1
+
+      - name: Upload panel images
+        uses: actions/upload-artifact@v4
+        with:
+          name: panels-chunk-${{ matrix.chunk }}
+          path: panels/
           retention-days: 1
 
   # ── Merge all chunks and commit ────────────────────────────────────────
@@ -88,19 +97,26 @@ jobs:
           pattern: manifest-chunk-*
           merge-multiple: true
 
+      - name: Download all panel images
+        uses: actions/download-artifact@v4
+        with:
+          path: panels
+          pattern: panels-chunk-*
+          merge-multiple: true
+
       - name: Merge manifests
         run: |
           python scripts/merge_manifests.py parts/manifest-chunk-*.json \
             --output manifest.json
 
-      - name: Commit manifest
+      - name: Commit manifest and panels
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add manifest.json
+          git add manifest.json panels/
           if git diff --cached --quiet; then
-            echo "No changes to manifest.json"
+            echo "No changes"
           else
-            git commit -m "Update panel manifest [automated]"
+            git commit -m "Update panel manifest and images [automated]"
             git push
           fi

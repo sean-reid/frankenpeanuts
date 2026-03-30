@@ -123,15 +123,11 @@
 <script>
 (function () {
   /* ===== CONFIG ===== */
-  var STRIP_URL = 'https://peanuts-search.com/I/';
-  var CORS_PROXIES = [
-    function(u){ return 'https://corsproxy.io/?url=' + encodeURIComponent(u); },
-    function(u){ return 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u); }
-  ];
+  var PANELS_DIR = 'panels/';
 
   /* ===== MANIFEST (pre-computed panel index) ===== */
-  var manifest = null;        // { "19501002": [{ index, x, w, h }, ...], ... }
-  var panelPool = [];         // flat array of { date, index, x, w, h } for random picks
+  var manifest = null;        // { "19501002": [{ index, file }, ...], ... }
+  var panelPool = [];         // flat array of { date, index, file }
 
   function loadManifest() {
     return fetch('manifest.json').then(function (r) { return r.json(); }).then(function (data) {
@@ -144,9 +140,7 @@
           panelPool.push({
             date: dates[i],
             index: panels[j].index,
-            x: panels[j].x,
-            w: panels[j].w,
-            h: panels[j].h
+            file: panels[j].file
           });
         }
       }
@@ -161,7 +155,9 @@
     if (!manifest[dateIdx]) return null;
     var panels = manifest[dateIdx];
     for (var i = 0; i < panels.length; i++) {
-      if (panels[i].index === panelIndex) return { date: dateIdx, index: panels[i].index, x: panels[i].x, w: panels[i].w, h: panels[i].h };
+      if (panels[i].index === panelIndex) {
+        return { date: dateIdx, index: panels[i].index, file: panels[i].file };
+      }
     }
     return null;
   }
@@ -169,31 +165,6 @@
   /* ===== DATE HELPERS ===== */
   function idxToDate(s) { return new Date(+s.slice(0,4), +s.slice(4,6)-1, +s.slice(6,8)); }
   function fmtDate(s) { return idxToDate(s).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}); }
-
-  /* ===== IMAGE LOADING (tries CORS proxies in order) ===== */
-  function loadImageCORS(rawUrl) {
-    return new Promise(function (resolve, reject) {
-      var i = 0;
-      function tryNext() {
-        if (i >= CORS_PROXIES.length) return reject(new Error('all proxies failed'));
-        var img = new Image();
-        img.crossOrigin = 'anonymous';
-        img.onload  = function () { resolve(img); };
-        img.onerror = function () { i++; tryNext(); };
-        img.src = CORS_PROXIES[i](rawUrl);
-      }
-      tryNext();
-    });
-  }
-
-  /* ===== EXTRACT A SINGLE PANEL AS DATA-URL ===== */
-  function extractDataURL(img, panel) {
-    var c = document.createElement('canvas');
-    c.width  = panel.w;
-    c.height = panel.h;
-    c.getContext('2d').drawImage(img, panel.x, 0, panel.w, panel.h, 0, 0, panel.w, panel.h);
-    return c.toDataURL('image/jpeg', 0.85);
-  }
 
   /* ===== STATE & HASH ===== */
   var state = [{},{},{},{}];
@@ -215,14 +186,14 @@
   }
 
   /* ===== DOM HELPERS ===== */
-  function showPanel(slot, dataURL, dateIdx) {
+  function showPanel(slot, imgSrc, dateIdx) {
     var el = document.getElementById('p' + slot);
     el.querySelector('.loader').classList.add('hidden');
     var old = el.querySelector('img'); if (old) old.remove();
     var oldL = el.querySelector('.date-label'); if (oldL) oldL.remove();
 
     var img = document.createElement('img');
-    img.src = dataURL;
+    img.src = imgSrc;
     img.alt = 'Peanuts panel from ' + fmtDate(dateIdx);
     el.appendChild(img);
 
@@ -251,12 +222,18 @@
   /* ===== LOAD A SINGLE SLOT ===== */
   function loadSlot(slot, panel) {
     showLoading(slot);
-    return loadImageCORS(STRIP_URL + panel.date).then(function (img) {
-      var dataURL = extractDataURL(img, panel);
-      state[slot] = { date: panel.date, panelIndex: panel.index };
-      showPanel(slot, dataURL, panel.date);
-    }).catch(function () {
-      showError(slot);
+    return new Promise(function (resolve) {
+      var img = new Image();
+      img.onload = function () {
+        state[slot] = { date: panel.date, panelIndex: panel.index };
+        showPanel(slot, PANELS_DIR + panel.file, panel.date);
+        resolve();
+      };
+      img.onerror = function () {
+        showError(slot);
+        resolve();
+      };
+      img.src = PANELS_DIR + panel.file;
     });
   }
 
@@ -282,7 +259,7 @@
     setButtons(true);
     var promises = parsed.map(function(p, i) {
       var panel = findPanel(p.date, p.panelIndex);
-      if (!panel) panel = randomPanel();  // fallback if hash references unknown panel
+      if (!panel) panel = randomPanel();
       return loadSlot(i, panel);
     });
     return Promise.all(promises).then(function () {
